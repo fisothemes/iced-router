@@ -1,0 +1,26 @@
+[package]
+authors = ["Goodwill Mzumala <fisothemes@gmail.com>"]
+name = "iced-router"
+version = "0.1.0-alpha.1"
+edition = "2024"
+license = "MIT"
+description = "Screen routing for iced applications"
+keywords = ["gui", "iced", "router", "navigation"]
+categories = ["gui"]
+repository = "https://github.com/fisothemes/iced-router"
+readme = "README.md"
+
+[dependencies]
+iced = "0.14"
+
+[[example]]
+name = "01_quickstart"
+path = "examples/01_quickstart/main.rs"
+
+[[example]]
+name = "02_navbar"
+path = "examples/02_navbar/main.rs"
+
+[[example]]
+name = "03_routes"
+path = "examples/03_routes/main.rs"
