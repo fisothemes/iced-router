@@ -26,7 +26,7 @@ mod home;
 mod search;
 mod user;
 
-const WINDOW_SIZE: iced::Size = iced::Size::new(420.0, 480.0);
+const WINDOW_SIZE: iced::Size = iced::Size::new(420.0, 240.0);
 
 fn main() -> iced::Result {
     iced_router::application(boot)
@@ -40,8 +40,8 @@ fn main() -> iced::Result {
         .run()
 }
 
-fn boot() -> (Router<Id>, Task<Message<Id>>) {
-    Router::builder(Id::Home, ())
+fn boot() -> (Router<Id>, (), Task<Message<Id>>) {
+    Router::builder(Id::Home)
         .navigation(Navigation::Stack)
         // Built once, kept for the lifetime of the application.
         .screen(Id::Home, home::Home::default())
@@ -52,7 +52,7 @@ fn boot() -> (Router<Id>, Task<Message<Id>>) {
             Id::User { id } => Some(user::User::new(*id).boxed()),
             _ => None,
         })
-        .build()
+        .build(())
 }
 
 /// Screen identifiers. An id carries everything its screen needs to be built.

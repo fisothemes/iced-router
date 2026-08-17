@@ -29,7 +29,6 @@ pub struct Router<I, S = ()> {
     screens: Vec<Entry<I, S>>,
     routes: Vec<Route<I, S>>,
     history: History<I>,
-    shared: S,
     next: usize,
 }
 
@@ -44,7 +43,6 @@ where
         screens: Vec<(I, BoxedScreen<I, S>)>,
         routes: Vec<Route<I, S>>,
         history: History<I>,
-        shared: S,
     ) -> Self {
         let screens: Vec<_> = screens
             .into_iter()
@@ -63,7 +61,6 @@ where
             screens,
             routes,
             history,
-            shared,
             next,
         }
     }
@@ -72,36 +69,32 @@ where
     ///
     /// [`Builder::build`](crate::Builder::build) already does this for the root.
     /// Call again only if you need to manually re‑enter.
-    pub fn enter(&mut self) -> Task<Message<I>> {
+    pub fn enter(&mut self, shared: &mut S) -> Task<Message<I>> {
         let id = self.history.current().clone();
-        self.enter_id(&id)
+        self.enter_id(&id, shared)
     }
 
     /// Handles a router message.
-    pub fn update(&mut self, message: Message<I>) -> Task<Message<I>> {
+    pub fn update(&mut self, shared: &mut S, message: Message<I>) -> Task<Message<I>> {
         match message {
-            Message::GoTo(id) => self.go_to(id),
-            Message::Back => self.back(),
-            Message::Replace(id) => self.replace(id),
-            Message::Reset => self.reset(),
+            Message::GoTo(id) => self.go_to(id, shared),
+            Message::Back => self.back(shared),
+            Message::Replace(id) => self.replace(id, shared),
+            Message::Reset => self.reset(shared),
             Message::Screen(handle, message) => {
                 let Some(index) = self.index_of_handle(handle) else {
                     return Task::none();
                 };
 
-                let Self {
-                    screens, shared, ..
-                } = self;
+                let action = self.screens[index].screen.update(shared, message);
 
-                let action = screens[index].screen.update(shared, message);
-
-                self.act(handle, action)
+                self.act(handle, action, shared)
             }
         }
     }
 
     /// Draws the current screen.
-    pub fn view(&self) -> Element<'_, Message<I>> {
+    pub fn view<'a>(&'a self, shared: &'a S) -> Element<'a, Message<I>> {
         match self.index_of(self.history.current()) {
             Some(index) => {
                 let entry = &self.screens[index];
@@ -109,7 +102,7 @@ where
 
                 entry
                     .screen
-                    .view(&self.shared)
+                    .view(shared)
                     .map(move |message| Message::Screen(handle, message))
             }
             None => iced::widget::space::horizontal().into(),
@@ -117,21 +110,20 @@ where
     }
 
     /// Subscriptions from all live screens.
-    pub fn subscription(&self) -> Subscription<Message<I>> {
+    pub fn subscription(&self, shared: &S) -> Subscription<Message<I>> {
         Subscription::batch(self.screens.iter().map(|entry| {
             entry
                 .screen
-                .subscription(&self.shared)
+                .subscription(shared)
                 .with(entry.handle)
                 .map(|(handle, message)| Message::Screen(handle, message))
         }))
     }
 
     /// The title of the current screen.
-    pub fn title(&self) -> Option<String> {
+    pub fn title(&self, shared: &S) -> Option<String> {
         let index = self.index_of(self.history.current())?;
-
-        self.screens[index].screen.title(&self.shared)
+        self.screens[index].screen.title(shared)
     }
 
     /// The current screen's id.
@@ -142,21 +134,6 @@ where
     /// Returns a reference to the router's history.
     pub fn history(&self) -> &History<I> {
         &self.history
-    }
-
-    /// Returns a reference to the shared state the screens.
-    pub fn shared(&self) -> &S {
-        &self.shared
-    }
-
-    /// Returns a mutable reference to the shared state of the screens.
-    pub fn shared_mut(&mut self) -> &mut S {
-        &mut self.shared
-    }
-
-    /// Replaces the shared state, returning the old one.
-    pub fn replace_shared(&mut self, shared: S) -> S {
-        std::mem::replace(&mut self.shared, shared)
     }
 
     /// Returns the id of a live screen, given its handle.
@@ -228,18 +205,23 @@ where
         true
     }
 
-    fn act(&mut self, handle: ScreenHandle, action: Action<I, ErasedMessage>) -> Task<Message<I>> {
+    fn act(
+        &mut self,
+        handle: ScreenHandle,
+        action: Action<I, ErasedMessage>,
+        shared: &mut S,
+    ) -> Task<Message<I>> {
         match action {
             Action::None => Task::none(),
             Action::Run(task) => tag(handle, task),
-            Action::GoTo(id) => self.go_to(id),
-            Action::Back => self.back(),
-            Action::Replace(id) => self.replace(id),
-            Action::Reset => self.reset(),
+            Action::GoTo(id) => self.go_to(id, shared),
+            Action::Back => self.back(shared),
+            Action::Replace(id) => self.replace(id, shared),
+            Action::Reset => self.reset(shared),
         }
     }
 
-    fn go_to(&mut self, id: I) -> Task<Message<I>> {
+    fn go_to(&mut self, id: I, shared: &mut S) -> Task<Message<I>> {
         if !self.ensure(&id) {
             return Task::none();
         }
@@ -250,20 +232,20 @@ where
             return Task::none();
         }
 
-        self.transition(from)
+        self.transition(from, shared)
     }
 
-    fn back(&mut self) -> Task<Message<I>> {
+    fn back(&mut self, shared: &mut S) -> Task<Message<I>> {
         let from = self.history.current().clone();
 
         if !self.history.back() {
             return Task::none();
         }
 
-        self.transition(from)
+        self.transition(from, shared)
     }
 
-    fn replace(&mut self, id: I) -> Task<Message<I>> {
+    fn replace(&mut self, id: I, shared: &mut S) -> Task<Message<I>> {
         if !self.ensure(&id) {
             return Task::none();
         }
@@ -274,10 +256,10 @@ where
             return Task::none();
         }
 
-        self.transition(from)
+        self.transition(from, shared)
     }
 
-    fn reset(&mut self) -> Task<Message<I>> {
+    fn reset(&mut self, shared: &mut S) -> Task<Message<I>> {
         let root = self.history.root().clone();
 
         if !self.ensure(&root) {
@@ -290,21 +272,17 @@ where
             return Task::none();
         }
 
-        self.transition(from)
+        self.transition(from, shared)
     }
 
     /// Runs [`Screen::on_exit`] for the old screen, drops routed screens that left the
     /// history, then runs [`Screen::on_enter`] for the new screen.
-    fn transition(&mut self, from: I) -> Task<Message<I>> {
+    fn transition(&mut self, from: I, shared: &mut S) -> Task<Message<I>> {
         let to = self.history.current().clone();
 
         let exit = match self.index_of(&from) {
             Some(index) => {
-                let Self {
-                    screens, shared, ..
-                } = self;
-
-                let entry = &mut screens[index];
+                let entry = &mut self.screens[index];
                 let handle = entry.handle;
 
                 tag(handle, entry.screen.on_exit(shared))
@@ -314,17 +292,13 @@ where
 
         self.prune();
 
-        Task::batch([exit, self.enter_id(&to)])
+        Task::batch([exit, self.enter_id(&to, shared)])
     }
 
-    fn enter_id(&mut self, id: &I) -> Task<Message<I>> {
+    fn enter_id(&mut self, id: &I, shared: &mut S) -> Task<Message<I>> {
         match self.index_of(id) {
             Some(index) => {
-                let Self {
-                    screens, shared, ..
-                } = self;
-
-                let entry = &mut screens[index];
+                let entry = &mut self.screens[index];
                 let handle = entry.handle;
 
                 tag(handle, entry.screen.on_enter(shared))
@@ -354,34 +328,34 @@ where
 ///
 /// The inner router owns its own shared state. It passes [`Action::Back`] outward only
 /// when its own history is exhausted.
-impl<I, J, S, T> Screen<I, T> for Router<J, S>
+impl<I, J, S> Screen<I, S> for Router<J, S>
 where
     J: Eq + Clone + Send + 'static,
 {
     type Message = Message<J>;
 
-    fn on_enter(&mut self, _shared: &mut T) -> Task<Message<J>> {
-        Router::enter(self)
+    fn on_enter(&mut self, shared: &mut S) -> Task<Message<J>> {
+        Router::enter(self, shared)
     }
 
-    fn title(&self, _shared: &T) -> Option<String> {
-        Router::title(self)
+    fn title(&self, shared: &S) -> Option<String> {
+        Router::title(self, shared)
     }
 
-    fn update(&mut self, _shared: &mut T, message: Message<J>) -> Action<I, Message<J>> {
+    fn update(&mut self, shared: &mut S, message: Message<J>) -> Action<I, Message<J>> {
         if matches!(message, Message::Back) && !self.history.can_go_back() {
             return Action::Back;
         }
 
-        Action::Run(Router::update(self, message))
+        Action::Run(Router::update(self, shared, message))
     }
 
-    fn view<'a>(&'a self, _shared: &'a T) -> Element<'a, Message<J>> {
-        Router::view(self)
+    fn view<'a>(&'a self, shared: &'a S) -> Element<'a, Message<J>> {
+        Router::view(self, shared)
     }
 
-    fn subscription(&self, _shared: &T) -> Subscription<Message<J>> {
-        Router::subscription(self)
+    fn subscription(&self, shared: &S) -> Subscription<Message<J>> {
+        Router::subscription(self, shared)
     }
 }
 
@@ -423,12 +397,6 @@ mod tests {
     impl Screen<Id, Log> for Page {
         type Message = Event;
 
-        fn on_enter(&mut self, log: &mut Log) -> Task<Event> {
-            log.entered.push(self.0.clone());
-
-            Task::none()
-        }
-
         fn update(&mut self, _log: &mut Log, message: Event) -> Action<Id, Event> {
             match message {
                 Event::Go(id) => Action::GoTo(id),
@@ -441,6 +409,12 @@ mod tests {
             iced::widget::space::horizontal().into()
         }
 
+        fn on_enter(&mut self, log: &mut Log) -> Task<Event> {
+            log.entered.push(self.0.clone());
+
+            Task::none()
+        }
+
         fn on_exit(&mut self, log: &mut Log) -> Task<Event> {
             log.exited.push(self.0.clone());
 
@@ -448,8 +422,8 @@ mod tests {
         }
     }
 
-    fn router(navigation: Navigation) -> Router<Id, Log> {
-        let (mut router, _) = Router::builder(Id::Home, Log::default())
+    fn router(navigation: Navigation) -> (Router<Id, Log>, Log) {
+        let (router, mut log, _) = Router::builder(Id::Home)
             .navigation(navigation)
             .screen(Id::Home, Page(String::from("home")))
             .screen(Id::Settings, Page(String::from("settings")))
@@ -457,121 +431,152 @@ mod tests {
                 Id::User { id } => Some(Page(format!("user {id}")).boxed()),
                 _ => None,
             })
-            .build();
+            .build(Log::default());
 
         // Forget the root's `on_enter`, so each test starts from a clean log.
-        router.shared_mut().entered.clear();
+        log.entered.clear();
 
-        router
+        (router, log)
     }
 
-    fn send(router: &mut Router<Id, Log>, id: &Id, event: Event) {
+    fn send(router: &mut Router<Id, Log>, log: &mut Log, id: &Id, event: Event) {
         let handle = router.handle_of(id).expect("the screen is live");
 
-        let _ = router.update(Message::Screen(handle, ErasedMessage::new(event)));
+        let _ = router.update(log, Message::Screen(handle, ErasedMessage::new(event)));
     }
 
     #[test]
     fn a_screen_can_navigate() {
-        let mut router = router(Navigation::Stack);
+        let (mut router, mut log) = router(Navigation::Stack);
 
-        send(&mut router, &Id::Home, Event::Go(Id::Settings));
+        send(&mut router, &mut log, &Id::Home, Event::Go(Id::Settings));
 
         assert_eq!(router.current(), &Id::Settings);
     }
 
     #[test]
     fn navigating_runs_the_hooks() {
-        let mut router = router(Navigation::Stack);
+        let (mut router, mut log) = router(Navigation::Stack);
 
-        send(&mut router, &Id::Home, Event::Go(Id::Settings));
+        send(&mut router, &mut log, &Id::Home, Event::Go(Id::Settings));
 
-        assert_eq!(router.shared().entered, vec![String::from("settings")]);
-        assert_eq!(router.shared().exited, vec![String::from("home")]);
+        assert_eq!(log.entered, vec![String::from("settings")]);
+        assert_eq!(log.exited, vec![String::from("home")]);
     }
 
     #[test]
     fn a_refused_move_runs_no_hooks() {
-        let mut router = router(Navigation::Stack);
+        let (mut router, mut log) = router(Navigation::Stack);
 
-        send(&mut router, &Id::Home, Event::Leave);
+        send(&mut router, &mut log, &Id::Home, Event::Leave);
 
         assert_eq!(router.current(), &Id::Home);
-        assert!(router.shared().entered.is_empty());
-        assert!(router.shared().exited.is_empty());
+        assert!(log.entered.is_empty());
+        assert!(log.exited.is_empty());
     }
 
     #[test]
     fn an_unknown_screen_is_not_visited() {
-        let (mut router, _) = Router::builder(Id::Home, Log::default())
+        let (mut router, mut log, _) = Router::builder(Id::Home)
             .screen(Id::Home, Page(String::from("home")))
-            .build();
+            .build(Log::default());
 
-        let _ = router.update(Message::GoTo(Id::Settings));
+        let _ = router.update(&mut log, Message::GoTo(Id::Settings));
 
         assert_eq!(router.current(), &Id::Home);
     }
 
     #[test]
     fn a_message_for_a_screen_that_is_not_shown_is_handled() {
-        let mut router = router(Navigation::Stack);
+        let (mut router, mut log) = router(Navigation::Stack);
 
-        send(&mut router, &Id::Home, Event::Go(Id::Settings));
-        send(&mut router, &Id::Home, Event::Go(Id::User { id: 7 }));
+        send(&mut router, &mut log, &Id::Home, Event::Go(Id::Settings));
+        send(
+            &mut router,
+            &mut log,
+            &Id::Home,
+            Event::Go(Id::User { id: 7 }),
+        );
 
         assert_eq!(router.current(), &Id::User { id: 7 });
     }
 
     #[test]
     fn a_route_builds_a_screen_on_entry() {
-        let mut router = router(Navigation::Stack);
+        let (mut router, mut log) = router(Navigation::Stack);
 
         assert_eq!(router.len(), 2);
 
-        send(&mut router, &Id::Home, Event::Go(Id::User { id: 7 }));
+        send(
+            &mut router,
+            &mut log,
+            &Id::Home,
+            Event::Go(Id::User { id: 7 }),
+        );
 
         assert_eq!(router.len(), 3);
-        assert_eq!(router.shared().entered, vec![String::from("user 7")]);
+        assert_eq!(log.entered, vec![String::from("user 7")]);
     }
 
     #[test]
     fn a_routed_screen_is_dropped_when_it_leaves_the_history() {
-        let mut router = router(Navigation::Stack);
+        let (mut router, mut log) = router(Navigation::Stack);
 
-        send(&mut router, &Id::Home, Event::Go(Id::User { id: 7 }));
+        send(
+            &mut router,
+            &mut log,
+            &Id::Home,
+            Event::Go(Id::User { id: 7 }),
+        );
 
         assert_eq!(router.len(), 3);
 
-        send(&mut router, &Id::User { id: 7 }, Event::Leave);
+        send(&mut router, &mut log, &Id::User { id: 7 }, Event::Leave);
 
         assert_eq!(router.len(), 2);
         assert_eq!(router.current(), &Id::Home);
         assert_eq!(
-            router.shared().exited,
+            log.exited,
             vec![String::from("home"), String::from("user 7")]
         );
     }
 
     #[test]
     fn a_routed_screen_lives_while_it_is_in_the_history() {
-        let mut router = router(Navigation::Stack);
+        let (mut router, mut log) = router(Navigation::Stack);
 
-        send(&mut router, &Id::Home, Event::Go(Id::User { id: 7 }));
+        send(
+            &mut router,
+            &mut log,
+            &Id::Home,
+            Event::Go(Id::User { id: 7 }),
+        );
 
         let handle = router.handle_of(&Id::User { id: 7 }).expect("the screen");
 
-        send(&mut router, &Id::User { id: 7 }, Event::Go(Id::Settings));
+        send(
+            &mut router,
+            &mut log,
+            &Id::User { id: 7 },
+            Event::Go(Id::Settings),
+        );
 
         assert_eq!(router.id_of(handle), Some(&Id::User { id: 7 }));
     }
 
     #[test]
     fn two_arguments_are_two_screens() {
-        let mut router = router(Navigation::Stack);
+        let (mut router, mut log) = router(Navigation::Stack);
 
-        send(&mut router, &Id::Home, Event::Go(Id::User { id: 7 }));
         send(
             &mut router,
+            &mut log,
+            &Id::Home,
+            Event::Go(Id::User { id: 7 }),
+        );
+        send(
+            &mut router,
+            &mut log,
             &Id::User { id: 7 },
             Event::Go(Id::User { id: 9 }),
         );
@@ -582,14 +587,24 @@ mod tests {
 
     #[test]
     fn an_address_is_never_given_out_twice() {
-        let mut router = router(Navigation::Stack);
+        let (mut router, mut log) = router(Navigation::Stack);
 
-        send(&mut router, &Id::Home, Event::Go(Id::User { id: 7 }));
+        send(
+            &mut router,
+            &mut log,
+            &Id::Home,
+            Event::Go(Id::User { id: 7 }),
+        );
 
         let first = router.handle_of(&Id::User { id: 7 }).expect("the screen");
 
-        send(&mut router, &Id::User { id: 7 }, Event::Leave);
-        send(&mut router, &Id::Home, Event::Go(Id::User { id: 7 }));
+        send(&mut router, &mut log, &Id::User { id: 7 }, Event::Leave);
+        send(
+            &mut router,
+            &mut log,
+            &Id::Home,
+            Event::Go(Id::User { id: 7 }),
+        );
 
         let second = router.handle_of(&Id::User { id: 7 }).expect("the screen");
 
@@ -599,10 +614,10 @@ mod tests {
 
     #[test]
     fn reset_returns_to_the_root() {
-        let mut router = router(Navigation::Stack);
+        let (mut router, mut log) = router(Navigation::Stack);
 
-        send(&mut router, &Id::Home, Event::Go(Id::Settings));
-        send(&mut router, &Id::Settings, Event::Home);
+        send(&mut router, &mut log, &Id::Home, Event::Go(Id::Settings));
+        send(&mut router, &mut log, &Id::Settings, Event::Home);
 
         assert_eq!(router.current(), &Id::Home);
         assert_eq!(router.history().depth(), 1);
@@ -610,19 +625,19 @@ mod tests {
 
     #[test]
     fn switch_never_goes_back() {
-        let mut router = router(Navigation::Switch);
+        let (mut router, mut log) = router(Navigation::Switch);
 
-        send(&mut router, &Id::Home, Event::Go(Id::Settings));
-        send(&mut router, &Id::Settings, Event::Leave);
+        send(&mut router, &mut log, &Id::Home, Event::Go(Id::Settings));
+        send(&mut router, &mut log, &Id::Settings, Event::Leave);
 
         assert_eq!(router.current(), &Id::Settings);
     }
 
     #[test]
     fn a_kept_screen_survives_a_switch() {
-        let mut router = router(Navigation::Switch);
+        let (mut router, mut log) = router(Navigation::Switch);
 
-        send(&mut router, &Id::Home, Event::Go(Id::Settings));
+        send(&mut router, &mut log, &Id::Home, Event::Go(Id::Settings));
 
         // Home left the history, but it was added with `screen`, so it is kept.
         assert_eq!(router.len(), 2);
@@ -631,21 +646,34 @@ mod tests {
 
     #[test]
     fn a_route_is_reachable_before_it_is_built() {
-        let router = router(Navigation::Stack);
+        let (router, _) = router(Navigation::Stack);
 
         assert!(!router.is_live(&Id::User { id: 7 }));
         assert!(router.can_go_to(&Id::User { id: 7 }));
     }
 
     #[test]
-    fn the_shared_state_can_be_swapped() {
-        let mut router = router(Navigation::Stack);
+    fn a_nested_router_shares_the_state_of_its_parent() {
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        enum Outer {
+            Tab,
+        }
 
-        send(&mut router, &Id::Home, Event::Go(Id::Settings));
+        let (inner, _, _) = Router::builder(Id::Home)
+            .screen(Id::Home, Page(String::from("inner home")))
+            .build(Log::default());
 
-        let previous = router.replace_shared(Log::default());
+        let (mut outer, mut log, _) = Router::builder(Outer::Tab)
+            .screen(Outer::Tab, inner)
+            .build(Log::default());
 
-        assert!(router.shared().exited.is_empty());
-        assert_eq!(previous.exited, vec![String::from("home")]);
+        // The inner router's `on_enter` ran against the outer router's log.
+        let handle = outer.handle_of(&Outer::Tab).expect("the tab");
+        let _ = outer.update(
+            &mut log,
+            Message::Screen(handle, ErasedMessage::new(Message::<Id>::Back)),
+        );
+
+        assert_eq!(outer.current(), &Outer::Tab);
     }
 }

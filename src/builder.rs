@@ -72,7 +72,7 @@ use iced::Task;
 ///     Search { query: String, page: u32 },
 /// }
 ///
-/// let (router, task) = Router::builder(Id::Home, Shared::default())
+/// let (router, shared, task) = Router::builder(Id::Home)
 ///     .navigation(Navigation::Stack)
 ///     .screen(Id::Home, Home::default())
 ///     .screen(Id::Settings, Settings::default())
@@ -81,15 +81,14 @@ use iced::Task;
 ///         Id::Search { query, page } => Some(Search::new(query, *page).boxed()),
 ///         _ => None,
 ///     })
-///     .build();
+///     .build(Shared::default());
 /// #
-/// # let _ = (router, task);
+/// # let _ = (router, shared, task);
 /// ```
 pub struct Builder<I, S = ()> {
     screens: Vec<(I, BoxedScreen<I, S>)>,
     routes: Vec<Route<I, S>>,
     root: I,
-    shared: S,
     navigation: Navigation,
     limit: usize,
 }
@@ -99,12 +98,11 @@ where
     I: Eq + Clone + Send + 'static,
 {
     /// Starts building a [`Router`] with `root` as the initial screen.
-    pub fn builder(root: I, shared: S) -> Builder<I, S> {
+    pub fn builder(root: I) -> Builder<I, S> {
         Builder {
             screens: Vec::new(),
             routes: Vec::new(),
             root,
-            shared,
             navigation: Navigation::default(),
             limit: DEFAULT_LIMIT,
         }
@@ -148,14 +146,30 @@ where
         self
     }
 
-    /// Builds the router and calls [`Screen::on_enter`] on the root screen.
+    /// Builds the router with an owned state and calls [`Screen::on_enter`] on the root screen.
     ///
     /// # Panics
     ///
     /// Panics if no screen or route supplies the root id.
-    pub fn build(self) -> (Router<I, S>, Task<Message<I>>) {
+    pub fn build(self, shared: S) -> (Router<I, S>, S, Task<Message<I>>) {
+        let mut shared = shared;
+        let (router, task) = self.build_with(&mut shared);
+
+        (router, shared, task)
+    }
+
+    /// Builds the router with a shared state and calls [`Screen::on_enter`] on the root screen.
+    ///
+    /// Use this when state is shared by several routers otherwise use [`Builder::build`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if no screen or route supplies the root id.
+    pub fn build_with(self, shared: &mut S) -> (Router<I, S>, Task<Message<I>>) {
         let history = History::new(self.root, self.navigation).with_limit(self.limit);
-        let mut router = Router::from_parts(self.screens, self.routes, history, self.shared);
+
+        let mut router = Router::from_parts(self.screens, self.routes, history);
+
         let root = router.current().clone();
 
         assert!(
@@ -163,7 +177,7 @@ where
             "a router needs a screen or a route for its root id"
         );
 
-        let task = router.enter();
+        let task = router.enter(shared);
 
         (router, task)
     }
@@ -202,10 +216,10 @@ mod tests {
 
     #[test]
     fn a_built_router_starts_at_its_root() {
-        let (router, _) = Router::builder(Id::Home, ())
+        let (router, _, _) = Router::builder(Id::Home)
             .screen(Id::Home, Page)
             .screen(Id::Settings, Page)
-            .build();
+            .build(());
 
         assert_eq!(router.current(), &Id::Home);
         assert_eq!(router.len(), 2);
@@ -214,22 +228,22 @@ mod tests {
 
     #[test]
     fn the_navigation_model_is_kept() {
-        let (router, _) = Router::builder(Id::Home, ())
+        let (router, _, _) = Router::builder(Id::Home)
             .navigation(Navigation::Switch)
             .screen(Id::Home, Page)
-            .build();
+            .build(());
 
         assert_eq!(router.history().navigation(), Navigation::Switch);
     }
 
     #[test]
     fn a_route_can_supply_the_root() {
-        let (router, _) = Router::builder(Id::User { id: 1 }, ())
+        let (router, _, _) = Router::builder(Id::User { id: 1 })
             .route(|id| match id {
                 Id::User { .. } => Some(Page.boxed()),
                 _ => None,
             })
-            .build();
+            .build(());
 
         assert_eq!(router.current(), &Id::User { id: 1 });
         assert_eq!(router.len(), 1);
@@ -237,33 +251,50 @@ mod tests {
 
     #[test]
     fn a_route_does_not_run_at_build_time() {
-        let (router, _) = Router::builder(Id::Home, ())
+        let (router, _, _) = Router::builder(Id::Home)
             .screen(Id::Home, Page)
             .route(|id| match id {
                 Id::User { .. } => Some(Page.boxed()),
                 _ => None,
             })
-            .build();
+            .build(());
 
+        // Only the kept screen is live. The route has built nothing yet.
         assert_eq!(router.len(), 1);
         assert!(router.can_go_to(&Id::User { id: 3 }));
     }
 
     #[test]
     fn the_same_id_is_only_added_once() {
-        let (router, _) = Router::builder(Id::Home, ())
+        let (router, _, _) = Router::builder(Id::Home)
             .screen(Id::Home, Page)
             .screen(Id::Home, Page)
-            .build();
+            .build(());
 
         assert_eq!(router.len(), 1);
     }
 
     #[test]
+    fn two_routers_can_share_one_state() {
+        let mut shared = ();
+
+        let (first, _) = Router::builder(Id::Home)
+            .screen(Id::Home, Page)
+            .build_with(&mut shared);
+
+        let (second, _) = Router::builder(Id::Settings)
+            .screen(Id::Settings, Page)
+            .build_with(&mut shared);
+
+        assert_eq!(first.current(), &Id::Home);
+        assert_eq!(second.current(), &Id::Settings);
+    }
+
+    #[test]
     #[should_panic(expected = "root")]
     fn a_router_without_a_root_screen_is_refused() {
-        let _ = Router::builder(Id::Home, ())
+        let _ = Router::builder(Id::Home)
             .screen(Id::Settings, Page)
-            .build();
+            .build(());
     }
 }

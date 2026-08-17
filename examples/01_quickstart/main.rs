@@ -29,14 +29,14 @@ fn main() -> iced::Result {
         .run()
 }
 
-fn boot() -> (Router<Id>, Task<iced_router::Message<Id>>) {
+fn boot() -> (Router<Id>, (), Task<iced_router::Message<Id>>) {
     // Build the router. Screens live for the whole app.
     // The router owns no shared state (S = ()), so we pass ().
-    Router::builder(Id::Home, ())
+    Router::builder(Id::Home)
         .navigation(Navigation::Stack)
         .screen(Id::Home, home::Home)
         .screen(Id::About, about::About)
-        .build()
+        .build(())
 }
 
 /// Screen identifiers. This is the only way one screen names another.

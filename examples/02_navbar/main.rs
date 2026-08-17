@@ -34,30 +34,31 @@ fn main() -> iced::Result {
 fn boot() -> (App, Task<Message>) {
     // 1. Build the router. Screens live for the whole app lifetime.
     //    If a screen needs a fresh state each visit, reset it in `Screen::on_enter`.
-    let (router, task) = Router::builder(Id::Home, Shared::default())
+    let (router, shared, task) = Router::builder(Id::Home)
         .navigation(Navigation::Switch)
         .screen(Id::Home, home::Home::default())
         .screen(Id::Settings, settings::Settings::default())
-        .build();
+        .build(Shared::default());
 
-    (App { router }, task)
+    (App { router, shared }, task)
 }
 
 struct App {
     router: Router<Id, Shared>,
+    shared: Shared,
 }
 
 impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         // 2. Pass every message straight to the router.
-        self.router.update(message)
+        self.router.update(&mut self.shared, message)
     }
 
     fn view(&self) -> Element<'_, Message> {
         // 3. Draw the navbar above the current screen.
         column![
             navbar(self.router.current()),
-            container(self.router.view()).padding(24),
+            container(self.router.view(&self.shared)).padding(24),
         ]
         .into()
     }
@@ -65,7 +66,7 @@ impl App {
     fn title(&self) -> String {
         // 4. Each screen sets its own title via `Screen::title`.
         self.router
-            .title()
+            .title(&self.shared)
             .unwrap_or_else(|| String::from("Navbar Example"))
     }
 }
